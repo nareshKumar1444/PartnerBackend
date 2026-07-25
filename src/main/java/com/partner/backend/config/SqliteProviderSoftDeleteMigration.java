@@ -34,18 +34,55 @@ class SqliteProviderSoftDeleteMigration implements InitializingBean {
         migrateTable("labs");
     }
 
+    /*
+     * --- Previous implementation (kept for reference) ---
+     *
+     * private void migrateTable(String table) {
+     *     addColumnIfMissing(table, "deleted", "INTEGER NOT NULL DEFAULT 0");
+     *     addColumnIfMissing(table, "deleted_at", "timestamp");
+     * }
+     *
+     * private void addColumnIfMissing(String table, String column, String sqlType) {
+     *     try {
+     *         jdbc.queryForList("SELECT " + column + " FROM " + table + " LIMIT 1");
+     *     } catch (Exception e) {
+     *         log.info("Adding {}.{} column for provider soft-delete", table, column);
+     *         jdbc.execute("ALTER TABLE " + table + " ADD COLUMN " + column + " " + sqlType);
+     *     }
+     * }
+     *
+     * Issue on fresh Railway DB: SELECT fails when table is missing, then ALTER TABLE
+     * also fails with "no such table: doctors".
+     */
+
     private void migrateTable(String table) {
+        if (!tableExists(table)) {
+            log.debug("Skipping soft-delete migration for {} — table not created yet (Hibernate will create it)", table);
+            return;
+        }
         addColumnIfMissing(table, "deleted", "INTEGER NOT NULL DEFAULT 0");
         addColumnIfMissing(table, "deleted_at", "timestamp");
     }
 
+    private boolean tableExists(String table) {
+        Integer count = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?",
+                Integer.class,
+                table);
+        return count != null && count > 0;
+    }
+
+    private boolean columnExists(String table, String column) {
+        return jdbc.queryForList("PRAGMA table_info(" + table + ")").stream()
+                .anyMatch(row -> column.equalsIgnoreCase(String.valueOf(row.get("name"))));
+    }
+
     private void addColumnIfMissing(String table, String column, String sqlType) {
-        try {
-            jdbc.queryForList("SELECT " + column + " FROM " + table + " LIMIT 1");
-        } catch (Exception e) {
-            log.info("Adding {}.{} column for provider soft-delete", table, column);
-            jdbc.execute("ALTER TABLE " + table + " ADD COLUMN " + column + " " + sqlType);
+        if (columnExists(table, column)) {
+            return;
         }
+        log.info("Adding {}.{} column for provider soft-delete", table, column);
+        jdbc.execute("ALTER TABLE " + table + " ADD COLUMN " + column + " " + sqlType);
     }
 
     private boolean isSqlite() {
