@@ -56,9 +56,10 @@ public class OneSignalPushService {
         }
         String appId = resolveAppId(providerType);
         if (!StringUtils.hasText(appId)) {
-            log.debug("OneSignal app id missing for provider type {}", providerType);
+            log.warn("[PUSH] OneSignal app id missing for provider type {}", providerType);
             return;
         }
+        log.info("[PUSH] Sending to {} via app {} — {}", externalId, appId, title);
         sendToExternalUser(appId, externalId, title, message, providerType, providerId);
     }
 
