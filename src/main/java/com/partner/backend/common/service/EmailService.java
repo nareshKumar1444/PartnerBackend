@@ -19,6 +19,7 @@ import org.springframework.util.StringUtils;
 public class EmailService {
 
     private final JavaMailSender mailSender;
+    private final BrevoApiEmailClient brevoApiEmailClient;
 
     @Value("${spring.mail.username:}")
     private String mailUsername;
@@ -52,7 +53,7 @@ public class EmailService {
         try {
             sendOtp(toEmail, recipientName, otpCode, expiryMinutes);
         } catch (Exception e) {
-            log.error("[EMAIL-OTP][async] Failed sending OTP to {} — check SMTP or set MAIL_CONSOLE_OTP=true for local dev", toEmail, e);
+            log.error("[EMAIL-OTP][async] Failed sending OTP to {} — set BREVO_API_KEY on Railway or MAIL_CONSOLE_OTP=true for local dev", toEmail, e);
         }
     }
 
@@ -67,30 +68,55 @@ public class EmailService {
             return;
         }
         String fromAddr = effectiveFromAddress();
-        if (!StringUtils.hasText(mailUsername)) {
+        if (!brevoApiEmailClient.isConfigured() && !StringUtils.hasText(mailUsername)) {
             throw new BadRequestException(
-                    "Email is not configured: set MAIL_USERNAME and MAIL_PASSWORD, or use MAIL_CONSOLE_OTP=true locally.");
+                    "Email is not configured: set BREVO_API_KEY (Railway) or MAIL_USERNAME/MAIL_PASSWORD, or use MAIL_CONSOLE_OTP=true locally.");
         }
         if (!StringUtils.hasText(fromAddr)) {
-            throw new BadRequestException("Set MAIL_FROM or MAIL_USERNAME so the sender address is known.");
+            throw new BadRequestException("Set MAIL_FROM so the sender address is known.");
+        }
+        try {
+            sendHtmlMessage(toEmail, recipientName, "Your Health Wallet OTP Code", buildOtpHtml(recipientName, otpCode, expiryMinutes));
+            log.info("[EMAIL-OTP] Sent OTP to {}", toEmail);
+        } catch (MailException e) {
+            log.error("[EMAIL-OTP] Spring Mail failed sending OTP to {}", toEmail, e);
+            throw new BadRequestException(smtpFailureUserMessage(e));
+        } catch (org.springframework.web.client.RestClientException e) {
+            log.error("[EMAIL-OTP] Brevo API failed sending OTP to {}", toEmail, e);
+            throw new BadRequestException(brevoFailureUserMessage(e));
+        }
+    }
+
+    private void sendHtmlMessage(String toEmail, String toName, String subject, String html) {
+        String fromAddr = effectiveFromAddress();
+        if (brevoApiEmailClient.isConfigured()) {
+            brevoApiEmailClient.sendHtmlEmail(fromAddr, fromName, toEmail, toName, subject, html);
+            return;
         }
         try {
             MimeMessage message = mailSender.createMimeMessage();
             MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
             helper.setFrom(fromAddr, fromName);
             helper.setTo(toEmail);
-            helper.setSubject("Your Health Wallet OTP Code");
-            helper.setText(buildOtpHtml(recipientName, otpCode, expiryMinutes), true);
+            helper.setSubject(subject);
+            helper.setText(html, true);
             mailSender.send(message);
-            log.info("[EMAIL-OTP] Sent OTP to {}", toEmail);
         } catch (MessagingException | java.io.UnsupportedEncodingException e) {
-            log.error("[EMAIL-OTP] Failed building OTP mime for {}", toEmail, e);
             throw new BadRequestException(
-                    "Unable to prepare OTP email. Check MAIL_FROM address format and SMTP settings.");
-        } catch (MailException e) {
-            log.error("[EMAIL-OTP] Spring Mail failed sending OTP to {}", toEmail, e);
-            throw new BadRequestException(smtpFailureUserMessage(e));
+                    "Unable to prepare email. Check MAIL_FROM address format and SMTP settings.");
         }
+    }
+
+    /** Surface Brevo API causes so logs and errors are actionable. */
+    private static String brevoFailureUserMessage(org.springframework.web.client.RestClientException e) {
+        String chain = e.getMessage() == null ? "" : e.getMessage().toLowerCase();
+        if (chain.contains("401") || chain.contains("unauthorized")) {
+            return "Brevo API key invalid. Set BREVO_API_KEY on Railway (Brevo → SMTP & API → API keys).";
+        }
+        if (chain.contains("400") && (chain.contains("sender") || chain.contains("from"))) {
+            return "Brevo rejected the sender address. Verify MAIL_FROM in Brevo → Senders & IP.";
+        }
+        return "Unable to send OTP email via Brevo API. Check BREVO_API_KEY and MAIL_FROM.";
     }
 
     /** Surface Gmail/auth/network causes so the mobile app shows a usable message instead of a generic 500. */
@@ -138,15 +164,9 @@ public class EmailService {
             return;
         }
         try {
-            MimeMessage message = mailSender.createMimeMessage();
-            MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
-            helper.setFrom(fromAddr, fromName);
-            helper.setTo(toEmail);
-            helper.setSubject("Your Health Wallet Account Has Been Approved!");
-            helper.setText(buildApprovalHtml(providerName, role), true);
-            mailSender.send(message);
+            sendHtmlMessage(toEmail, providerName, "Your Health Wallet Account Has Been Approved!", buildApprovalHtml(providerName, role));
             log.info("[EMAIL] Sent approval email to {}", toEmail);
-        } catch (MessagingException | java.io.UnsupportedEncodingException | MailException e) {
+        } catch (BadRequestException | MailException | org.springframework.web.client.RestClientException e) {
             log.error("[EMAIL] Failed to send approval email to {}", toEmail, e);
         }
     }
@@ -159,15 +179,9 @@ public class EmailService {
             return;
         }
         try {
-            MimeMessage message = mailSender.createMimeMessage();
-            MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
-            helper.setFrom(fromAddr, fromName);
-            helper.setTo(toEmail);
-            helper.setSubject("Health Wallet Account Verification Update");
-            helper.setText(buildRejectionHtml(providerName, reason), true);
-            mailSender.send(message);
+            sendHtmlMessage(toEmail, providerName, "Health Wallet Account Verification Update", buildRejectionHtml(providerName, reason));
             log.info("[EMAIL] Sent rejection email to {}", toEmail);
-        } catch (MessagingException | java.io.UnsupportedEncodingException | MailException e) {
+        } catch (BadRequestException | MailException | org.springframework.web.client.RestClientException e) {
             log.error("[EMAIL] Failed to send rejection email to {}", toEmail, e);
         }
     }
@@ -428,15 +442,9 @@ public class EmailService {
             return;
         }
         try {
-            MimeMessage message = mailSender.createMimeMessage();
-            MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
-            helper.setFrom(fromAddr, fromName);
-            helper.setTo(toEmail);
-            helper.setSubject(subject);
-            helper.setText(html, true);
-            mailSender.send(message);
+            sendHtmlMessage(toEmail, null, subject, html);
             log.info("[EMAIL] Sent lab mail ({}) to {}", subject, toEmail);
-        } catch (MessagingException | java.io.UnsupportedEncodingException | MailException e) {
+        } catch (BadRequestException | MailException | org.springframework.web.client.RestClientException e) {
             log.error("[EMAIL] Failed to send lab mail to {}", toEmail, e);
         }
     }
@@ -538,15 +546,9 @@ public class EmailService {
             return;
         }
         try {
-            MimeMessage message = mailSender.createMimeMessage();
-            MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
-            helper.setFrom(fromAddr, fromName);
-            helper.setTo(toEmail);
-            helper.setSubject(subject);
-            helper.setText(html, true);
-            mailSender.send(message);
+            sendHtmlMessage(toEmail, null, subject, html);
             log.info("[EMAIL] Sent order status mail ({}) to {}", subject, toEmail);
-        } catch (MessagingException | java.io.UnsupportedEncodingException | MailException e) {
+        } catch (BadRequestException | MailException | org.springframework.web.client.RestClientException e) {
             log.error("[EMAIL] Failed to send order status mail to {}", toEmail, e);
         }
     }
@@ -678,14 +680,8 @@ public class EmailService {
             return;
         }
         try {
-            MimeMessage message = mailSender.createMimeMessage();
-            MimeMessageHelper helper = new MimeMessageHelper(message, true, "UTF-8");
-            helper.setFrom(fromAddr, fromName);
-            helper.setTo(toEmail);
-            helper.setSubject(subject);
-            helper.setText(html, true);
-            mailSender.send(message);
-        } catch (MessagingException | java.io.UnsupportedEncodingException | MailException e) {
+            sendHtmlMessage(toEmail, null, subject, html);
+        } catch (BadRequestException | MailException | org.springframework.web.client.RestClientException e) {
             log.error("[EMAIL] Failed to send appointment mail to {}", toEmail, e);
         }
     }
