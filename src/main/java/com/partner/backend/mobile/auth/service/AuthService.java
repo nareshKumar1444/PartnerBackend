@@ -4,6 +4,7 @@ import com.partner.backend.common.entity.*;
 import com.partner.backend.common.exception.BadRequestException;
 import com.partner.backend.common.exception.UnauthorizedException;
 import com.partner.backend.common.repository.*;
+import com.partner.backend.common.push.PushExternalUserId;
 import com.partner.backend.common.security.JwtUtil;
 import com.partner.backend.mobile.auth.dto.AuthResponse;
 import com.partner.backend.mobile.auth.dto.ProviderLoginRequest;
@@ -81,6 +82,7 @@ public class AuthService {
 
         String token = jwtUtil.generateToken(user.getEmail(), user.getRole().name(), providerId);
         redisTemplate.opsForValue().set("LOGIN_USER:" + user.getEmail(), token);
+        ProviderType providerType = toProviderType(role);
         return AuthResponse.builder()
                 .token(token)
                 .role(user.getRole().name())
@@ -88,8 +90,19 @@ public class AuthService {
                 .providerId(providerId)
                 .providerName(name)
                 .providerStatus(status)
+                .pushExternalUserId(PushExternalUserId.forProvider(providerType, providerId))
                 .build();
     }
+    private static ProviderType toProviderType(UserRole role) {
+        return switch (role) {
+            case DOCTOR -> ProviderType.DOCTOR;
+            case PHARMACY -> ProviderType.PHARMACY;
+            case LAB -> ProviderType.LAB;
+            case PATIENT -> ProviderType.PATIENT;
+            case ADMIN -> null;
+        };
+    }
+
     /** Forgot password — step 1: confirm the email belongs to a provider account and email an OTP. */
     @Transactional
     public void forgotPassword(String rawEmail) {

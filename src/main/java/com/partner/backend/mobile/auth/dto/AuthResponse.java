@@ -17,4 +17,6 @@ public class AuthResponse {
     private Long providerId;
     private String providerName;
     private ProviderStatus providerStatus;
+    /** OneSignal External User ID — mobile must call OneSignal.login(pushExternalUserId) after login. */
+    private String pushExternalUserId;
 }

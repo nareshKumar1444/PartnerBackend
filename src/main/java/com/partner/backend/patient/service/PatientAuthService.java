@@ -9,6 +9,8 @@ import com.partner.backend.common.exception.UnauthorizedException;
 import com.partner.backend.common.repository.OtpRepository;
 import com.partner.backend.common.repository.PatientRepository;
 import com.partner.backend.common.repository.UserRepository;
+import com.partner.backend.common.entity.ProviderType;
+import com.partner.backend.common.push.PushExternalUserId;
 import com.partner.backend.common.security.JwtUtil;
 import com.partner.backend.common.util.CnicNormalizer;
 import com.partner.backend.mobile.auth.dto.AuthResponse;
@@ -172,6 +174,7 @@ public class PatientAuthService {
                 .providerId(patient.getId())
                 .providerName(patient.getName())
                 .providerStatus(null)
+                .pushExternalUserId(PushExternalUserId.forProvider(ProviderType.PATIENT, patient.getId()))
                 .build();
 
         PatientProfileResponse profile = toProfileResponse(patient);

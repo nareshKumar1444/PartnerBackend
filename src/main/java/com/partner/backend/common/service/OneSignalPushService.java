@@ -46,6 +46,8 @@ public class OneSignalPushService {
     @Async
     public void sendProviderPushAsync(Long providerId, ProviderType providerType, String title, String message) {
         if (!isConfigured()) {
+            log.warn("[PUSH] Skipped (OneSignal disabled or ONESIGNAL_REST_API_KEY missing): {} / {}",
+                    providerType, providerId);
             return;
         }
         String externalId = PushExternalUserId.forProvider(providerType, providerId);
@@ -121,11 +123,25 @@ public class OneSignalPushService {
                     ONESIGNAL_API_URL,
                     new HttpEntity<>(body, headers),
                     String.class);
+            String responseBody = response.getBody() == null ? "" : response.getBody();
             if (!response.getStatusCode().is2xxSuccessful()) {
-                log.warn("OneSignal push failed (HTTP {}): {}", response.getStatusCode(), response.getBody());
+                log.warn("[PUSH] OneSignal HTTP {} for {} app={}: {}",
+                        response.getStatusCode(), externalUserId, appId, responseBody);
+                return;
             }
+            if (responseBody.contains("\"id\":\"") && !responseBody.contains("\"id\":\"\"")) {
+                log.info("[PUSH] Sent to {} via app {} — {}", externalUserId, appId, title);
+                return;
+            }
+            log.warn(
+                    "[PUSH] OneSignal accepted but no device received it for {} app={}. "
+                            + "Mobile app must call OneSignal.login('{}') after login and allow notifications. Response: {}",
+                    externalUserId,
+                    appId,
+                    externalUserId,
+                    responseBody);
         } catch (RestClientException ex) {
-            log.warn("OneSignal push request failed for {}: {}", externalUserId, ex.getMessage());
+            log.warn("[PUSH] OneSignal request failed for {} app={}: {}", externalUserId, appId, ex.getMessage());
         }
     }
 
